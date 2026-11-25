@@ -401,7 +401,10 @@ class Window(Adw.ApplicationWindow):
                            "asleep" if not s.get("gpu_active") else "idle")
         lim = s.get("limits") or {}
         sustained = [v for v in (lim.get("msr_pl1_w"), lim.get("fw_pl1_w")) if v]
-        if eff == "auto":
+        if eff == "auto" and s.get("hp_takeover_s"):
+            m, sec = divmod(s["hp_takeover_s"], 60)
+            cap = f"HP takes over in {m}:{sec:02d}"
+        elif eff == "auto":
             cap = "HP caps it at ≈45 W"
         else:
             cap = f"limit {min(sustained)} W" if sustained else ""
@@ -445,7 +448,8 @@ class Window(Adw.ApplicationWindow):
             self.fans.set_description(MODE_TEXT[name])
             if name == "auto":
                 self.toasts.add_toast(Adw.Toast(
-                    title="Fans may stay fast for up to 2 minutes while HP takes over.", timeout=6))
+                    title="Fans stay at ~4000 rpm or faster for 2 minutes until HP takes over.",
+                    timeout=6))
         else:
             self._pending.pop("mode", None)
         GLib.idle_add(self._refresh_once)

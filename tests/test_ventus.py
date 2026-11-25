@@ -198,6 +198,37 @@ class DaemonOnFakeLaptop(unittest.TestCase):
         self.assertEqual(read(f"{f.mmio}/constraint_0_power_limit_uw"), "55000000")
         self.assertFalse(os.path.exists(f.sock))
 
+    def test_handover_to_hp_auto(self):
+        f = self.fake
+        pwm = lambda: int(read(f"{f.hp}/pwm1"))  # noqa: E731
+        self.assertIsNone(self.status()["hp_takeover_s"])
+
+        # curve running slowly (65 C -> pwm 128): hand over at the floor of 176
+        self.assertTrue(self.set(fan_mode="curve")["ok"])
+        self.wait(lambda: pwm() == 128, 4, "pwm 128")
+        self.assertTrue(self.set(fan_mode="auto")["ok"])
+        self.wait(lambda: self.enable() == "2", 4, "auto")
+        self.assertEqual(pwm(), 176)
+        self.wait(lambda: self.status()["hp_takeover_s"] is not None, 3, "countdown")
+        self.assertTrue(115 <= self.status()["hp_takeover_s"] <= 125)
+
+        # curve running fast: keep its speed
+        f.temp(85)
+        self.assertTrue(self.set(fan_mode="curve")["ok"])
+        self.wait(lambda: self.enable() == "1" and pwm() >= 200, 8, "fast curve")
+        self.assertIsNone(self.status()["hp_takeover_s"])
+        fast = pwm()
+        self.assertTrue(self.set(fan_mode="auto")["ok"])
+        self.wait(lambda: self.enable() == "2", 4, "auto")
+        self.assertGreaterEqual(pwm(), fast)
+
+        # from max: full speed is held
+        self.assertTrue(self.set(fan_mode="max")["ok"])
+        self.wait(lambda: self.enable() == "0", 4, "max")
+        self.assertTrue(self.set(fan_mode="auto")["ok"])
+        self.wait(lambda: self.enable() == "2", 4, "auto")
+        self.assertEqual(pwm(), 255)
+
     def test_battery_limit_put_back_after_power_cut(self):
         f = self.fake
         ac = f"{f.root}/sys/class/power_supply/ACAD/online"

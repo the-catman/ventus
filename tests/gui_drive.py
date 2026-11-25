@@ -40,8 +40,14 @@ def check(win, want, sent):
     got_d, got_ui = daemon_mode(), win.mode_group.get_active_name()
     modes_sent = [k["fan_mode"] for k in sent if "fan_mode" in k]
     ok = got_d == want and got_ui == want and modes_sent[-1:] == [want]
+    extra = ""
+    if want == "auto":                    # just handed over: the power card counts down to HP
+        sub = win.t_pow.sub.get_label()
+        ok = ok and sub.startswith("HP takes over in ")
+        extra = f" power card={sub!r}"
     results.append(ok)
-    print(f"{'PASS' if ok else 'FAIL'}: picked {want}: daemon={got_d} ui={got_ui} sent so far={modes_sent}")
+    print(f"{'PASS' if ok else 'FAIL'}: picked {want}: daemon={got_d} ui={got_ui} "
+          f"sent so far={modes_sent}{extra}")
 
 
 if __name__ == "__main__":

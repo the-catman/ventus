@@ -9,6 +9,9 @@ manual mode from a temperature curve, and sets the firmware (MMIO) sustained CPU
 After a power cut HP's firmware leaves the CPU's own (MSR) power limit at its battery value
 (24/30 W) even once the charger is back; ventusd puts the power profile's value back.
 
+HP's EC holds the last fan speed for ~2 min after the fans go back to auto (while the CPU keeps its
+full limit), so ventusd hands over at no less than ~4000 rpm.
+
 Fail-safes: any exit puts the fans back to HP auto (also done by systemd ExecStopPost);
 unreadable CPU temperature -> fans max; fans reading 0 RPM while hot -> fans max for 60 s;
 control temperature >= 95 C for 3 s -> 100 %.
@@ -38,6 +41,13 @@ RUN_DIR = os.path.dirname(C.SOCKET_PATH)
 ORIG_PL1_FILE = os.path.join(RUN_DIR, "firmware_pl1_uw")  # HP's value, remembered until reboot
 TICK = 1.0
 ENABLE_FOR_MODE = {"auto": 2, "curve": 1, "max": 0}       # hwmon pwm1_enable values
+
+# Handing the fans back to HP: the driver's "auto" command does nothing in the firmware, so the EC
+# keeps the last fan speed until its user-defined state times out, ~2 min after the last fan
+# command (123 s measured). The CPU keeps its full power limit until then. So never hand over
+# below this speed: pwm 176 = 4000/4300 rpm on 8CC0, about what HP auto runs under load.
+HANDOVER_PWM = 176
+HP_TAKEOVER_S = 125
 
 # CPU (MSR) PL1/PL2 in W that HP's firmware sets for each power profile when on AC (measured on
 # 8CC0). On battery it lowers them to 24/30 W and doesn't raise them again when the charger comes
@@ -299,6 +309,7 @@ class Daemon:
         self.zero_ticks = 0
         self.last_pwm = None
         self.last_pwm_write = 0.0
+        self.handover_at = None           # when the fans were last handed back to HP auto
         self.last_tick = None
         self.last_resolve = 0.0
         self.orig_pl1 = self._remember_firmware_pl1()
@@ -364,7 +375,14 @@ class Daemon:
         if self.hw.hp:
             try:
                 want = ENABLE_FOR_MODE[mode]
-                if self.dirty or self.hw.pwm_enable() != want:
+                cur = self.hw.pwm_enable()
+                if self.dirty or cur != want:
+                    if mode == "auto":
+                        try:
+                            if self.hand_fans_to_hp(cur):
+                                self.handover_at = now
+                        except OSError as e:          # still hand over, just without the speed
+                            log(f"could not set the handover fan speed: {e}")
                     self.hw.set_pwm_enable(want)
                     log(f"fan mode -> {mode}")
                     self.dirty = False
@@ -408,6 +426,7 @@ class Daemon:
             "control_temp": round(self.fan.ema, 1) if (mode == "curve" and self.fan.ema is not None) else control,
             "fan1_rpm": f1, "fan2_rpm": f2,
             "fan_target_pct": round(target_pct, 1) if target_pct is not None else None,
+            "hp_takeover_s": self.takeover_left(now, mode),
             "package_w": round(w, 1) if (w := self.hw.package_watts()) is not None else None,
             "p_mhz": self.hw.mhz(self.hw.p_cpus), "e_mhz": self.hw.mhz(self.hw.e_cpus),
             "limits": limits, "profile": profile, "on_ac": on_ac,
@@ -453,9 +472,33 @@ class Daemon:
             f"{profile} profile's {want[0]}/{want[1]} W (try {self.clamp_tries})")
         return ""
 
+    def hand_fans_to_hp(self, cur):
+        """Before switching to HP auto from curve or max: set the speed the EC will hold for the
+        next ~2 minutes (see HANDOVER_PWM) - the curve's speed if faster, full speed from max.
+        This also restarts the EC's timer, so we know when HP takes over. True if done."""
+        if cur not in (ENABLE_FOR_MODE["curve"], ENABLE_FOR_MODE["max"]):
+            return False                   # already auto (or unknown): the EC isn't holding a speed
+        pwm = 255 if cur == ENABLE_FOR_MODE["max"] else max(self.last_pwm or 0, HANDOVER_PWM)
+        if cur != ENABLE_FOR_MODE["curve"]:
+            self.hw.set_pwm_enable(ENABLE_FOR_MODE["curve"])   # pwm1 is only writable in manual
+        self.hw.set_pwm(pwm)
+        log(f"handing the fans to HP auto at pwm {pwm} (held ~2 min until HP takes over)")
+        return True
+
+    def takeover_left(self, now, mode):
+        """Seconds until HP's EC takes the fans back (and caps the CPU again), or None."""
+        if mode != "auto" or self.handover_at is None:
+            return None
+        left = HP_TAKEOVER_S - (now - self.handover_at)
+        return round(left) if left > 0 else None
+
     def cleanup(self):
         log("stopping - fans back to HP auto, firmware power limit restored")
         if self.hw.hp:
+            try:
+                self.hand_fans_to_hp(self.hw.pwm_enable())
+            except OSError as e:
+                log(f"could not set the handover fan speed: {e}")
             try:
                 self.hw.set_pwm_enable(ENABLE_FOR_MODE["auto"])
             except OSError as e:

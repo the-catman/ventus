@@ -38,6 +38,10 @@ Measured on 2026-11-25:
 - If the fans read 0 RPM while the CPU is at 80 °C or more, in any mode, the fans run at full speed
   for 60 s.
 - If the temperature stays at 95 °C or more for 3 s, the fans go to 100% regardless of the curve.
+- Switching to HP auto (or the service stopping) hands the fans over at no less than ~4000 rpm.
+  HP's controller keeps the last fan speed for about 2 minutes after a switch to auto, and the CPU
+  keeps its full power limit until then. The driver's "auto" command does nothing in the firmware;
+  the controller only takes over when its timer runs out. The app counts down to that moment.
 - Ventus writes the CPU's MSR limits in one case only: on AC (for at least 10 s), when they're
   below what the firmware itself sets for the current profile (Performance 130/130 W, Balanced and
   Low-power 55/130 W). It writes back exactly that value, never more. If the firmware keeps
