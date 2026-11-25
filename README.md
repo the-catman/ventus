@@ -68,3 +68,7 @@ Logs: `journalctl -u ventusd`
 The tests need no root and no hardware; the daemon runs against a fake sysfs tree:
 
     /usr/bin/python3 -sE -m unittest discover -s tests -v
+
+## License
+
+MIT, see [LICENSE](LICENSE).
