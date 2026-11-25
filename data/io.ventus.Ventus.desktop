@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Ventus
+GenericName=Fan and Power Control
+Comment=Fan curve and CPU power limit for the HP OMEN 16
+Exec=/usr/local/bin/ventus
+Icon=io.ventus.Ventus
+Terminal=false
+Categories=Settings;HardwareSettings;
+Keywords=fan;temperature;cooling;power;cpu;omen;
+StartupNotify=true

@@ -1,0 +1,25 @@
+[Unit]
+Description=Ventus fan curve and CPU power control (HP OMEN 16, board 8CC0)
+After=systemd-modules-load.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/python3 -sE /opt/ventus/ventusd.py
+# Fail-safe: whatever happened to the daemon (crash, kill, watchdog), give the fans back to HP.
+ExecStopPost=/bin/sh -c 'for f in /sys/devices/platform/hp-wmi/hwmon/hwmon*/pwm1_enable; do [ -w "$f" ] && echo 2 > "$f"; done; exit 0'
+Restart=always
+RestartSec=3
+WatchdogSec=20
+RuntimeDirectory=ventus
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# Hardening: it only needs /sys, /dev/nvidia* (nvidia-smi) and its own config.
+ProtectSystem=strict
+ReadWritePaths=-/etc/ventus
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
