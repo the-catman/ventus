@@ -34,11 +34,11 @@ Measured on 2026-11-25:
 - If the service exits for any reason (stop, crash, watchdog), the fans go back to HP auto.
   The daemon does this itself, and systemd's `ExecStopPost` does it too. HP's original power limit
   is restored.
+- Ventus never overrides the fan mode or the curve you pick. The fans follow your curve all the
+  way up; if it gets too hot, the CPU slows itself down.
 - If the CPU temperature can't be read in curve mode, the fans go to full speed.
-- If the fans read 0 RPM while the CPU is at 80 °C or more, in any mode, the fans run at full speed
-  for 60 s.
-- If the temperature stays at 95 °C or more for 3 s, the fans go to 100% regardless of the curve.
-- Switching to HP auto (or the service stopping) hands the fans over at no less than ~4000 rpm.
+- Switching to HP auto (or the service stopping) hands the fans over at ~4000 rpm, or at the
+  curve's speed for the current temperature if that is faster.
   HP's controller keeps the last fan speed for about 2 minutes after a switch to auto, and the CPU
   keeps its full power limit until then. The driver's "auto" command does nothing in the firmware;
   the controller only takes over when its timer runs out. The app counts down to that moment.

@@ -206,10 +206,6 @@ class CurveEditor(Gtk.Widget):
         dim = 0.45 if not self.active else 1.0
         x0, y0, pw, ph = self._plot()
 
-        # forced-full zone
-        fx, _ = self.to_px(C.FORCE_FULL_TEMP, 0)
-        snap.append_color(rgba(0.88, 0.2, 0.2, 0.07), Graphene.Rect().init(fx, y0, x0 + pw - fx, ph))
-
         # grid + labels
         for t in range(self.T0, self.T1 + 1, 10):
             x, _ = self.to_px(t, 0)
@@ -304,8 +300,8 @@ class Window(Adw.ApplicationWindow):
         self.curve = CurveEditor(self._on_curve)
         card.append(self.curve)
         foot = Gtk.Box(spacing=8, margin_start=10, margin_end=4, margin_bottom=4)
-        hint = Gtk.Label(label="Drag the points to shape the curve. Fans always run at 100% "
-                               "above 95 °C.", xalign=0, wrap=True, hexpand=True)
+        hint = Gtk.Label(label="Drag the points to shape the curve.", xalign=0, wrap=True,
+                         hexpand=True)
         hint.add_css_class("caption")
         hint.add_css_class("dim-label")
         reset = Gtk.Button(label="Reset", valign=Gtk.Align.CENTER)
@@ -518,7 +514,7 @@ class App(Adw.Application):
     def _about(self, *_):
         Adw.AboutDialog(application_name="Ventus", application_icon=C.APP_ID, version=C.VERSION,
                         comments="Fan curve and CPU power control for the HP OMEN 16 (8CC0).",
-                        license_type=Gtk.License.GPL_2_0).present(self.props.active_window)
+                        license_type=Gtk.License.MIT_X11).present(self.props.active_window)
 
 
 if __name__ == "__main__":

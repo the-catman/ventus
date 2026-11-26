@@ -170,16 +170,14 @@ class DaemonOnFakeLaptop(unittest.TestCase):
         self.assertFalse(self.set(power_limit_w=500)["ok"])
         self.assertFalse(self.set(fan_mode="turbo")["ok"])
 
-        # fans reading 0 RPM while hot -> forced max
+        # fans reading 0 RPM while hot: Ventus leaves the chosen mode alone
         write(f"{f.hp}/fan1_input", 0)
         write(f"{f.hp}/fan2_input", 0)
-        self.wait(lambda: self.enable() == "0", 6, "emergency max")
-        self.assertTrue(self.status()["emergency"])
-        # picking a mode clears the emergency
+        time.sleep(4)
+        self.assertEqual(self.enable(), "1")
+        self.assertEqual(self.status()["effective_mode"], "curve")
         write(f"{f.hp}/fan1_input", 4000)
         write(f"{f.hp}/fan2_input", 4300)
-        self.assertTrue(self.set(fan_mode="curve")["ok"])
-        self.wait(lambda: self.enable() == "1", 4, "back to curve")
 
         # CPU temperature unreadable in curve mode -> max
         os.unlink(f"{f.core}/temp1_input")
@@ -222,12 +220,20 @@ class DaemonOnFakeLaptop(unittest.TestCase):
         self.wait(lambda: self.enable() == "2", 4, "auto")
         self.assertGreaterEqual(pwm(), fast)
 
-        # from max: full speed is held
+        # from max: the curve's speed at the current temperature (85 C -> 85 %), not full speed
         self.assertTrue(self.set(fan_mode="max")["ok"])
         self.wait(lambda: self.enable() == "0", 4, "max")
         self.assertTrue(self.set(fan_mode="auto")["ok"])
         self.wait(lambda: self.enable() == "2", 4, "auto")
-        self.assertEqual(pwm(), 255)
+        self.assertEqual(pwm(), 217)
+
+        # from max while cool: the 176 floor
+        f.temp(40)
+        self.assertTrue(self.set(fan_mode="max")["ok"])
+        self.wait(lambda: self.enable() == "0", 4, "max")
+        self.assertTrue(self.set(fan_mode="auto")["ok"])
+        self.wait(lambda: self.enable() == "2", 4, "auto")
+        self.assertEqual(pwm(), 176)
 
     def test_battery_limit_put_back_after_power_cut(self):
         f = self.fake

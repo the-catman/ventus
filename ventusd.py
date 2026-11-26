@@ -12,9 +12,8 @@ After a power cut HP's firmware leaves the CPU's own (MSR) power limit at its ba
 HP's EC holds the last fan speed for ~2 min after the fans go back to auto (while the CPU keeps its
 full limit), so ventusd hands over at no less than ~4000 rpm.
 
-Fail-safes: any exit puts the fans back to HP auto (also done by systemd ExecStopPost);
-unreadable CPU temperature -> fans max; fans reading 0 RPM while hot -> fans max for 60 s;
-control temperature >= 95 C for 3 s -> 100 %.
+It never overrides the fan mode or the curve you pick. Fail-safes: any exit puts the fans back to
+HP auto (also done by systemd ExecStopPost); in curve mode, unreadable CPU temperature -> fans max.
 
 Talks to the GUI over a Unix socket (JSON lines). Anyone may read status; changes are allowed
 for root and the uids in config "allowed_uids" (checked with SO_PEERCRED).
@@ -272,17 +271,12 @@ class FanLogic:
     def __init__(self):
         self.ema = None
         self.pct = None
-        self.hot_ticks = 0
 
     def reset(self):
         self.pct = None
 
     def step(self, curve, temp):
         self.ema = temp if self.ema is None else self.ema + 0.35 * (temp - self.ema)
-        self.hot_ticks = self.hot_ticks + 1 if temp >= C.FORCE_FULL_TEMP else 0
-        if self.hot_ticks >= 3:
-            self.pct = 100.0
-            return self.pct
         up = C.curve_percent(curve, self.ema)
         down = C.curve_percent(curve, self.ema + 2)       # 2 C hysteresis before slowing down
         if self.pct is None:
@@ -305,8 +299,6 @@ class Daemon:
         self.status = {"ok": True, "starting": True}
         self.running = True
         self.dirty = True                 # (re)apply the fan mode on the next tick
-        self.emergency_until = 0.0
-        self.zero_ticks = 0
         self.last_pwm = None
         self.last_pwm_write = 0.0
         self.handover_at = None           # when the fans were last handed back to HP auto
@@ -352,22 +344,8 @@ class Daemon:
         control = max(t for t in (cpu, gpu) if t is not None) if (cpu or gpu) else None
         msg = ""
 
-        # fans reading 0 RPM while hot is never right (seen on 8CC0 after a bad auto reset)
-        hot = cpu is not None and cpu >= 80
-        if self.hw.hp and f1 == 0 and f2 == 0 and hot:
-            self.zero_ticks += 1
-        else:
-            self.zero_ticks = 0
-        if self.zero_ticks >= 3 and now >= self.emergency_until:
-            log(f"fans at 0 RPM at {cpu:.0f} C - forcing max for 60 s")
-            self.emergency_until = now + 60
-            self.dirty = True
-
         mode = cfg["fan_mode"]
-        if now < self.emergency_until:
-            mode = "max"
-            msg = "Fans were stopped while hot - running them at full speed for a minute."
-        elif cpu is None and mode == "curve":
+        if cpu is None and mode == "curve":
             mode = "max"
             msg = "CPU temperature unreadable - fans at full speed."
 
@@ -379,7 +357,7 @@ class Daemon:
                 if self.dirty or cur != want:
                     if mode == "auto":
                         try:
-                            if self.hand_fans_to_hp(cur):
+                            if self.hand_fans_to_hp(cur, cfg["curve"], control):
                                 self.handover_at = now
                         except OSError as e:          # still hand over, just without the speed
                             log(f"could not set the handover fan speed: {e}")
@@ -420,7 +398,6 @@ class Daemon:
             "ok": True, "version": C.VERSION,
             "fan_control": bool(self.hw.hp),
             "mode": cfg["fan_mode"], "effective_mode": mode,
-            "emergency": now < self.emergency_until,
             "curve": cfg["curve"], "power_limit_w": cfg["power_limit_w"],
             "cpu_temp": cpu, "gpu_temp": gpu, "gpu_active": self.hw.gpu_active(),
             "control_temp": round(self.fan.ema, 1) if (mode == "curve" and self.fan.ema is not None) else control,
@@ -472,13 +449,18 @@ class Daemon:
             f"{profile} profile's {want[0]}/{want[1]} W (try {self.clamp_tries})")
         return ""
 
-    def hand_fans_to_hp(self, cur):
+    def hand_fans_to_hp(self, cur, curve=None, temp=None):
         """Before switching to HP auto from curve or max: set the speed the EC will hold for the
-        next ~2 minutes (see HANDOVER_PWM) - the curve's speed if faster, full speed from max.
-        This also restarts the EC's timer, so we know when HP takes over. True if done."""
+        next ~2 minutes (see HANDOVER_PWM), or the curve's speed if that is faster (from max: what
+        the curve gives at the current temperature). This also restarts the EC's timer, so we know
+        when HP takes over. True if done."""
         if cur not in (ENABLE_FOR_MODE["curve"], ENABLE_FOR_MODE["max"]):
             return False                   # already auto (or unknown): the EC isn't holding a speed
-        pwm = 255 if cur == ENABLE_FOR_MODE["max"] else max(self.last_pwm or 0, HANDOVER_PWM)
+        pwm = HANDOVER_PWM
+        if cur == ENABLE_FOR_MODE["curve"]:
+            pwm = max(pwm, self.last_pwm or 0)
+        elif curve and temp is not None:
+            pwm = max(pwm, round(C.curve_percent(curve, temp) * 255 / 100))
         if cur != ENABLE_FOR_MODE["curve"]:
             self.hw.set_pwm_enable(ENABLE_FOR_MODE["curve"])   # pwm1 is only writable in manual
         self.hw.set_pwm(pwm)
@@ -496,7 +478,10 @@ class Daemon:
         log("stopping - fans back to HP auto, firmware power limit restored")
         if self.hw.hp:
             try:
-                self.hand_fans_to_hp(self.hw.pwm_enable())
+                cpu, gpu = self.hw.cpu_temp(), self.hw.gpu_temp()
+                temps = [t for t in (cpu, gpu) if t is not None]
+                self.hand_fans_to_hp(self.hw.pwm_enable(), self.cfg["curve"],
+                                     max(temps) if temps else None)
             except OSError as e:
                 log(f"could not set the handover fan speed: {e}")
             try:
@@ -531,10 +516,8 @@ class Daemon:
             except ValueError as e:
                 return {"ok": False, "error": str(e)}
             with self.lock:
-                if "fan_mode" in new:          # an explicit choice also ends an emergency
-                    self.dirty = True          # (it re-triggers if the fans really are stopped)
-                    self.emergency_until = 0.0
-                    self.zero_ticks = 0
+                if "fan_mode" in new:
+                    self.dirty = True
                 self.cfg.update(new)
                 # reflect the change in status right away, so clients never read a stale mode
                 self.status.update({k: v for k, v in new.items() if k in self.status})

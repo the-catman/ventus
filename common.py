@@ -16,8 +16,6 @@ FAN_MODES = ("auto", "curve", "max")
 # Curve limits. Temperatures are the control temperature (max of CPU and GPU), in C.
 CURVE_T_MIN, CURVE_T_MAX = 30, 100
 CURVE_MIN_POINTS, CURVE_MAX_POINTS = 2, 8
-# Fans run at 100% whenever the control temperature stays at/above this, whatever the curve says.
-FORCE_FULL_TEMP = 95
 
 # CPU sustained power limit (firmware/MMIO PL1) the user may pick, in W.
 POWER_MIN_W, POWER_MAX_W = 45, 90
